@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16.4
+    container_name: almaz-postgres
+    environment:
+      POSTGRES_USER: almaz
+      POSTGRES_PASSWORD: almazpassword
+      POSTGRES_DB: almaz_db
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:5434:5432'
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U almaz -d almaz_db']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: almaz-app
+    ports:
+      - '4000:4000'
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DSN: 'host=postgres user=almaz password=almazpassword dbname=almaz_db port=5432 sslmode=disable'
+    restart: unless-stopped

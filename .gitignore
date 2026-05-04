@@ -1,0 +1,49 @@
+# --- Secrets: ignore all .env files by default ---
+**/.env
+**/.env.local
+**/.env.*.local
+
+# But keep these (no secrets — safe defaults committed) ---
+!**/.env.example
+!**/.env.development
+!**/.env.production
+
+# Explicit backend secrets (defense in depth) ---
+fastpin/almaz/.env
+telegramHumo/.env
+
+# --- Backend runtime data ---
+fastpin/almaz/postgres-data/
+fastpin/almaz/uploads/
+fastpin/almaz/almaz
+fastpin/almaz/main
+fastpin/almaz/*.exe
+
+# --- Deploy tools (contains generated SSH key) ---
+deploy-tools/
+.deploy/
+
+# --- Node / Vite ---
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/coverage/
+
+# --- Logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Editor / OS junk ---
+.DS_Store
+Thumbs.db
+__MACOSX/
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Claude / local config ---
+.claude/

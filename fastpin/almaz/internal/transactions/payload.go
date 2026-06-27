@@ -20,9 +20,10 @@ type Transaction struct {
 	DonatName string `json:"donatName"`
 	CreatedBy string `json:"createdBy" gorm:"index"` 
 	Order     string `json:"order"`
-	Status    string `json:"status" gorm:"default:pending;index"` 
+	Status    string `json:"status" gorm:"default:pending;index"`
 	PlayerId  string `json:"playerId" gorm:"default:-"`
 	ServerId  string `json:"serverId" gorm:"default:-"`
+	PaymentId string `json:"paymentId" gorm:"index"`
 }
 type User struct {
 	Login    string `gorm:"unique" json:"login"`

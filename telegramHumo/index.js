@@ -84,16 +84,31 @@ function ask(question) {
 }
 
 const client = new TelegramClient(session, apiId, apiHash, {
-	connectionRetries: 5,
+	// Port 80 (default TCP) is flaky/blocked on some UZ networks; 443 (WSS) is
+	// far more reliable. The saved session is transport-agnostic, so switching
+	// does not require re-login.
+	useWSS: true,
+	connectionRetries: 1000,
+	retryDelay: 2000,
+	autoReconnect: true,
+	maxConcurrentDownloads: 1,
 })
 
 async function main() {
+	const phoneFromEnv = process.env.PHONE_NUMBER
 	await client.start({
-		phoneNumber: async () => await ask('📱 Phone: '),
+		phoneNumber: async () =>
+			phoneFromEnv || (await ask('📱 Phone: ')),
 		phoneCode: async () => await ask('📨 Code: '),
 		password: async () => await ask('🔑 2FA password (если есть): '),
 		onError: err => console.log(err),
 	})
+
+	const savedSession = client.session.save()
+	console.log('\n=== SESSION (save this to .env as SESSION=...) ===')
+	console.log(savedSession)
+	console.log('=== END SESSION ===\n')
+	console.log('✅ Telegram client connected. Listening for HUMO/CardXabar messages...')
 
 	client.addEventHandler(async event => {
 		const message = event.message
@@ -110,16 +125,20 @@ async function main() {
 		const dateTime = extractDateTime(text, sender)
 		const cardNumber = extractCardLast4(text)
 
-		if (!amount || !dateTime || !cardNumber) {
+		// amount + dateTime are what the backend matches on; cardNumber is only
+		// informational, so a missing 💳 must NOT drop a real top-up message.
+		if (!amount || !dateTime) {
+			console.warn('[tg] unparsable message dropped from', sender, JSON.stringify({ amount, dateTime }))
 			return
 		}
 
 		const result = await postToBackend({
 			amount,
 			sender,
-			cardNumber,
+			cardNumber: cardNumber || '',
 			...dateTime,
 		})
+		console.log('[tg] forwarded', sender, amount, '->', JSON.stringify(result))
 	}, new NewMessage({}))
 }
 

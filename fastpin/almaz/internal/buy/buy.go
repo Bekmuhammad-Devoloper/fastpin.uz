@@ -159,7 +159,9 @@ func (handler *BuyHandler) create() http.HandlerFunc {
 
 		orderId, err := provider.CreateOrder(botIdNumber, link)
 		if err != nil {
-			handler.AuthHandler.UpdateBalance(user.Token, offerPrice)
+			if _, refundErr := handler.AuthHandler.UpdateBalance(user.Token, offerPrice); refundErr != nil {
+				fmt.Println("[BUY] CRITICAL: order failed AND refund failed, user:", user.Token, "amount:", offerPrice, "err:", refundErr)
+			}
 			res.Json(w, err.Error(), 500)
 			return
 		}

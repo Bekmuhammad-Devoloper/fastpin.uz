@@ -2,6 +2,7 @@ package payment
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"demo/almaz/internal/auth"
 	"demo/almaz/pkg/ctxkeys"
 	"demo/almaz/pkg/db"
@@ -14,15 +15,15 @@ import (
 	"time"
 )
 
-const (
-	telegramBotToken = "7982130574:AAFQR-DbdO44Kysnwb41EzY9U_cfjwJnHFI"
-)
-
-var telegramAdmins = []int64{7866997948, 5469349844}
-
-func sendTelegramMessage(text string) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", telegramBotToken)
-	for _, chatID := range telegramAdmins {
+// sendTelegramMessage notifies the configured admin chat IDs. The bot token and
+// admin IDs come from config (BOT_TOKEN / TELEGRAM_ADMINS env vars); if the token
+// is unset it is a no-op so a missing config never blocks the payment flow.
+func (handler *PaymentHandler) sendTelegramMessage(text string) {
+	if handler.BotToken == "" {
+		return
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", handler.BotToken)
+	for _, chatID := range handler.TelegramAdmins {
 		payload, _ := json.Marshal(map[string]interface{}{
 			"chat_id":    chatID,
 			"text":       text,
@@ -46,7 +47,7 @@ func NewPaymentHandler(router *http.ServeMux, deps PaymenthandlerDeps) *PaymentH
 	router.Handle("/payment/getPayment", deps.AuthMW(http.HandlerFunc(handler.getPayment())))
 	router.Handle("/payment/getPaymentByUser", deps.AuthMW(http.HandlerFunc(handler.getPaymentByUser())))
 	router.Handle("/payment/getAllPayment", deps.AuthMW(http.HandlerFunc(handler.getAllPayment())))
-	router.HandleFunc("/payment/createPayment", handler.createPayment())
+	router.Handle("/payment/createPayment", deps.AuthMW(http.HandlerFunc(handler.createPayment())))
 	router.Handle("/payment/updatePayment", deps.AdminMW(http.HandlerFunc(handler.updatePayment())))
 	router.Handle("/payment/deletePayment", deps.AuthMW(http.HandlerFunc(handler.deletePayment())))
 	router.HandleFunc("/payment/createTelegram", handler.createTelegram())
@@ -175,11 +176,19 @@ func (handler *PaymentHandler) getAllPayment() http.HandlerFunc {
 }
 func (handler *PaymentHandler) createPayment() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		requester, ok := r.Context().Value(ctxkeys.UserContextKey).(auth.User)
+		if !ok {
+			res.Json(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		body, err := req.HandleBody[createPaymentRequest](&w, r)
 		if err != nil {
 			res.Json(w, err, 400)
 			return
 		}
+		// The reservation always belongs to the authenticated caller; never
+		// trust a userId supplied in the request body.
+		body.UserId = requester.Token
 		loc := time.FixedZone("UZT", 5*60*60)
 		now := time.Now().In(loc)
 		tx := handler.PaymentRepository.DataBase.Begin()
@@ -322,6 +331,13 @@ func (handler *PaymentHandler) deletePayment() http.HandlerFunc {
 }
 func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Server-to-server endpoint: only the trusted telegram listener may
+		// credit balances. Fail closed if the shared secret is unset.
+		if handler.TelegramIngestSecret == "" ||
+			subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Ingest-Secret")), []byte(handler.TelegramIngestSecret)) != 1 {
+			res.Json(w, map[string]string{"error": "forbidden"}, http.StatusForbidden)
+			return
+		}
 		body, err := req.HandleBody[createPaymentTelegram](&w, r)
 		if err != nil {
 			res.Json(w, err, 400)
@@ -389,7 +405,7 @@ func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 					"📋 Бронирование: <b>не найдено</b>",
 				body.Sender, body.Amount, timeStr,
 			)
-			sendTelegramMessage(msg)
+			handler.sendTelegramMessage(msg)
 			res.Json(w, map[string]string{"error": "no matching reservation found"}, 404)
 			return
 		}
@@ -407,7 +423,7 @@ func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 						"📋 Бронирование: <b>уже обработано</b>",
 					body.Sender, body.Amount, timeStr,
 				)
-				sendTelegramMessage(msg)
+				handler.sendTelegramMessage(msg)
 				res.Json(w, map[string]string{"error": "reservation already processed"}, 409)
 				return
 			}
@@ -432,6 +448,7 @@ func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 			CreatedBy: body.Sender,
 			Order:     "-",
 			Status:    "completed",
+			PaymentId: payment.Id,
 		}
 
 		if err := txDb.Create(&transaction).Error; err != nil {
@@ -440,8 +457,9 @@ func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 			res.Json(w, err, 500)
 			return
 		}
-		_, err = handler.AuthHandler.UpdateBalance(payment.UserId, payment.Price)
-		if err != nil {
+		// Credit the balance inside the same transaction as the ledger insert
+		// and the reservation delete so all three commit or roll back together.
+		if err := handler.AuthHandler.UpdateBalanceTx(txDb, payment.UserId, payment.Price); err != nil {
 			txDb.Rollback()
 			handler.saveFailedTransaction(body, payment.UserId)
 			res.Json(w, err, 500)
@@ -477,7 +495,7 @@ func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 				"🎮 Логин пользователя: <b>%s</b>",
 			body.Sender, body.Amount, timeStr, userLogin,
 		)
-		sendTelegramMessage(successMsg)
+		handler.sendTelegramMessage(successMsg)
 
 		fmt.Println("success", body)
 		res.Json(w, map[string]string{

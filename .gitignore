@@ -19,9 +19,10 @@ fastpin/almaz/almaz
 fastpin/almaz/main
 fastpin/almaz/*.exe
 
-# --- Deploy tools (contains generated SSH key) ---
+# --- Deploy tools (contains generated SSH key + secrets) ---
 deploy-tools/
 .deploy/
+**/secrets/
 
 # --- Node / Vite ---
 **/node_modules/

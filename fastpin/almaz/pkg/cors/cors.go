@@ -1,13 +1,35 @@
 package cors
 
-import "net/http"
+import (
+	"net/http"
+	"os"
+	"strings"
+)
 
-var allowedOrigins = map[string]bool{
-	"https://fastpin.uz":     true,
-	"https://www.fastpin.uz": true,
-	"http://fastpin.uz":      true,
-	"http://www.fastpin.uz":  true,
+var defaultAllowed = []string{
+	"https://fastpin.uz",
+	"https://www.fastpin.uz",
+	"http://fastpin.uz",
+	"http://www.fastpin.uz",
+	"https://new.fastpin.uz",
+	"http://new.fastpin.uz",
 }
+
+var allowedOrigins = func() map[string]bool {
+	m := map[string]bool{}
+	for _, o := range defaultAllowed {
+		m[o] = true
+	}
+	if extra := os.Getenv("ALLOWED_ORIGINS"); extra != "" {
+		for _, o := range strings.Split(extra, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				m[o] = true
+			}
+		}
+	}
+	return m
+}()
 
 func Cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -33,9 +33,10 @@ type Transaction struct {
 	Minute    int    `json:"minute"`
 	GameName  string `json:"gameName"`
 	DonatName string `json:"donatName"`
-	CreatedBy string `json:"createdBy"` 
+	CreatedBy string `json:"createdBy"`
 	Order     string `json:"order"`
-	Status    string `json:"status"` 
+	Status    string `json:"status"`
+	PaymentId string `json:"paymentId" gorm:"index"`
 }
 type PaymentHandler struct {
 	*configs.Config

@@ -56,15 +56,34 @@ func (handler *AuthHandler) GetUserByToken(token string) (User, error) {
 }
 func (handler *AuthHandler) UpdateBalance(token string, newPrice int) (User, error) {
 	var user User
-	err := handler.AuthRepository.DataBase.
+	res := handler.AuthRepository.DataBase.
 		Model(&User{}).
 		Where("token = ?", token).
-		Update("balance", gorm.Expr("balance + ?", newPrice)).
-		Error
-	if err != nil {
+		Update("balance", gorm.Expr("balance + ?", newPrice))
+	if res.Error != nil {
+		return user, res.Error
+	}
+	if res.RowsAffected == 0 {
 		return user, errors.New("user is not found")
 	}
 	return user, nil
+}
+
+// UpdateBalanceTx credits/debits a user's balance inside the caller's DB
+// transaction so the change is atomic with the surrounding ledger writes.
+// It fails (and thus rolls the caller's tx back) when no user row matches.
+func (handler *AuthHandler) UpdateBalanceTx(tx *gorm.DB, token string, amount int) error {
+	res := tx.
+		Model(&User{}).
+		Where("token = ?", token).
+		Update("balance", gorm.Expr("balance + ?", amount))
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("user is not found")
+	}
+	return nil
 }
 func (handler *AuthHandler) DecreaseBalance(tx *gorm.DB, userToken string, price int) error {
 	var user User

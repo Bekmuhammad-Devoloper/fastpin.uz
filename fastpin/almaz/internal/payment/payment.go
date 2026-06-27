@@ -15,6 +15,45 @@ import (
 	"time"
 )
 
+// sendOtziv posts a public payment receipt ("otziv") to the reviews group via the
+// support bot (SUPPORT_BOT_TOKEN / OTZIV_CHAT_ID env vars). No-op if unconfigured,
+// and it never blocks the payment flow on failure.
+func (handler *PaymentHandler) sendOtziv(text string) {
+	if handler.SupportBotToken == "" || handler.OtzivChatId == "" {
+		return
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", handler.SupportBotToken)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"chat_id":                  handler.OtzivChatId,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+	})
+	http.Post(url, "application/json", bytes.NewBuffer(payload))
+}
+
+// formatSom renders an integer sum with thin spaces every three digits, e.g.
+// 1234567 -> "1 234 567".
+func formatSom(n int) string {
+	s := fmt.Sprintf("%d", n)
+	neg := false
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		s = s[1:]
+	}
+	var out []byte
+	for i, c := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ' ')
+		}
+		out = append(out, c)
+	}
+	if neg {
+		return "-" + string(out)
+	}
+	return string(out)
+}
+
 // sendTelegramMessage notifies the configured admin chat IDs. The bot token and
 // admin IDs come from config (BOT_TOKEN / TELEGRAM_ADMINS env vars); if the token
 // is unset it is a no-op so a missing config never blocks the payment flow.
@@ -282,20 +321,55 @@ func (handler *PaymentHandler) updatePayment() http.HandlerFunc {
 			DonatName: "-",
 			CreatedBy: "admin",
 			Order:     "-",
+			Status:    "completed",
+			PaymentId: payment.Id,
 		}
-		_, err = handler.AuthHandler.UpdateBalance(body.UserId, payment.Price)
-		if err != nil {
+		// Credit, ledger insert and reservation delete commit or roll back together.
+		txDb := handler.PaymentRepository.DataBase.Begin()
+		if txDb.Error != nil {
+			res.Json(w, txDb.Error, 500)
+			return
+		}
+		if err := handler.AuthHandler.UpdateBalanceTx(txDb, body.UserId, payment.Price); err != nil {
+			txDb.Rollback()
 			res.Json(w, err, 500)
 			return
 		}
-		if err := handler.PaymentRepository.DataBase.Create(&tx).Error; err != nil {
+		if err := txDb.Create(&tx).Error; err != nil {
+			txDb.Rollback()
 			res.Json(w, err, 500)
 			return
 		}
-		if err := handler.PaymentRepository.DataBase.Delete(&payment).Error; err != nil {
+		if err := txDb.Delete(&payment).Error; err != nil {
+			txDb.Rollback()
 			res.Json(w, err, 500)
 			return
 		}
+		txDb.Commit()
+
+		userLogin := body.UserId
+		var user struct{ Login string }
+		if err := handler.PaymentRepository.DataBase.
+			Table("users").Select("login").
+			Where("token = ?", body.UserId).
+			First(&user).Error; err == nil {
+			userLogin = user.Login
+		}
+		timeStr := fmt.Sprintf("%02d:%02d %02d.%02d.%d", now.Hour(), now.Minute(), now.Day(), int(now.Month()), now.Year())
+		otzivMsg := fmt.Sprintf(
+			"🧾 <b>FASTPIN — Toʻlov cheki</b>\n"+
+				"━━━━━━━━━━━━━━\n"+
+				"✅ Toʻlov muvaffaqiyatli qabul qilindi\n"+
+				"💵 Summa: <b>%s soʻm</b>\n"+
+				"🕐 Vaqt: <b>%s</b>\n"+
+				"👤 Foydalanuvchi: <b>%s</b>\n"+
+				"🧾 Chek: <code>%s</code>\n"+
+				"━━━━━━━━━━━━━━\n"+
+				"🌐 fastpin.uz — Original garant ✓",
+			formatSom(payment.Price), timeStr, userLogin, tx.Id,
+		)
+		handler.sendOtziv(otzivMsg)
+
 		res.Json(w, tx, 200)
 	}
 }
@@ -496,6 +570,20 @@ func (handler *PaymentHandler) createTelegram() http.HandlerFunc {
 			body.Sender, body.Amount, timeStr, userLogin,
 		)
 		handler.sendTelegramMessage(successMsg)
+
+		otzivMsg := fmt.Sprintf(
+			"🧾 <b>FASTPIN — Toʻlov cheki</b>\n"+
+				"━━━━━━━━━━━━━━\n"+
+				"✅ Toʻlov muvaffaqiyatli qabul qilindi\n"+
+				"💵 Summa: <b>%s soʻm</b>\n"+
+				"🕐 Vaqt: <b>%s</b>\n"+
+				"👤 Foydalanuvchi: <b>%s</b>\n"+
+				"🧾 Chek: <code>%s</code>\n"+
+				"━━━━━━━━━━━━━━\n"+
+				"🌐 fastpin.uz — Original garant ✓",
+			formatSom(body.Amount), timeStr, userLogin, transaction.Id,
+		)
+		handler.sendOtziv(otzivMsg)
 
 		fmt.Println("success", body)
 		res.Json(w, map[string]string{

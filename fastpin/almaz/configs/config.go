@@ -17,6 +17,8 @@ type Config struct {
 	TelegramIngestSecret string
 	BotToken             string
 	TelegramAdmins       []int64
+	SupportBotToken      string
+	OtzivChatId          string
 }
 type DbConfig struct {
 	Dsn string
@@ -47,6 +49,8 @@ func LoadConfig() *Config {
 		TelegramIngestSecret: os.Getenv("TELEGRAM_INGEST_SECRET"),
 		BotToken:             os.Getenv("BOT_TOKEN"),
 		TelegramAdmins:       parseAdmins(os.Getenv("TELEGRAM_ADMINS")),
+		SupportBotToken:      os.Getenv("SUPPORT_BOT_TOKEN"),
+		OtzivChatId:          os.Getenv("OTZIV_CHAT_ID"),
 	}
 }
 
